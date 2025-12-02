@@ -109,8 +109,7 @@ class MusicDataset(torch.utils.data.Dataset):
     # This returns the size of the vocabulary - how many unique
     # tokens/chords are there?
     def getNumTokens(self):
-        #TODO: Fill in.
-        pass        
+        return len(self.chordToId)
     
     # Helper function that takes in a list of chord Ids and 
     # writes them to a WAV file (named wavName) so you can listen to them
