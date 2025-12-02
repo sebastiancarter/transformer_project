@@ -68,10 +68,17 @@ class MusicDataset(torch.utils.data.Dataset):
     # Takes in: A corpus of songs
     # Returns: Nothing (just fills in self. variables)
     def buildMapsFromCorpus(self, corpus):
-        #TODO: fill in 
-        pass
-    
-    
+        self.chordToId = {}
+        self.idToChord = {}
+        idNumber=0
+        for song in corpus:
+            for chord in song:
+                if chord not in self.chordToId:
+                    self.chordToId[chord] = idNumber
+                    self.idToChord[idNumber] = chord
+                    idNumber += 1
+
+
     # Helper function: convert a list of chords to a list of ids
     # Takes in: a list of chords
     # Returns: a list of ids 
