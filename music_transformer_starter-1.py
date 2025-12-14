@@ -33,7 +33,7 @@ class MusicDataset(torch.utils.data.Dataset):
            self.corpus = corpus[threshold:]
         self.buildIndexToSongAndChordMap()
         # this is set in buildMapsFromCorpus 
-        self.startToken = "<START>" #Change this later if you need an explicit start token
+        self.startToken = None #Change this later if you need an explicit start token
            
         
         
@@ -77,11 +77,13 @@ class MusicDataset(torch.utils.data.Dataset):
                     self.chordToId[chord] = idNumber
                     self.idToChord[idNumber] = chord
                     idNumber += 1
-        self.startTokenId = idNumber
+        self.numTokens = idNumber
+        """
         # making a start token
         self.startToken = "<START>"
         self.chordToId["<START>"] = self.startTokenId
         self.idToChord[self.startTokenId] = "<START>"
+        """
 
 
 
@@ -115,7 +117,7 @@ class MusicDataset(torch.utils.data.Dataset):
     # This returns the size of the vocabulary - how many unique
     # tokens/chords are there?
     def getNumTokens(self):
-        return self.startTokenId + 1
+        return self.numTokens
     
     # Helper function that takes in a list of chord Ids and 
     # writes them to a WAV file (named wavName) so you can listen to them
@@ -340,7 +342,7 @@ print("Using device", device)
 model = MusicTransformer(device, train_data.getNumTokens()).to(device)
 print(model)
 
-epochs = 35
+epochs = 3500
 for e in range(epochs):
     print("Epoch", e+1)
     model.doTrain(train_dataloader)
