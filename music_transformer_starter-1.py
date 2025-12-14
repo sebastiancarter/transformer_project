@@ -32,8 +32,8 @@ class MusicDataset(torch.utils.data.Dataset):
         else:
            self.corpus = corpus[threshold:]
         self.buildIndexToSongAndChordMap()
-        
-        self.startToken = None #Change this later if you need an explicit start token
+        # this is set in buildMapsFromCorpus 
+        self.startToken = "<START>" #Change this later if you need an explicit start token
            
         
         
@@ -77,6 +77,12 @@ class MusicDataset(torch.utils.data.Dataset):
                     self.chordToId[chord] = idNumber
                     self.idToChord[idNumber] = chord
                     idNumber += 1
+        self.startTokenId = idNumber
+        # making a start token
+        self.startToken = "<START>"
+        self.chordToId["<START>"] = self.startTokenId
+        self.idToChord[self.startTokenId] = "<START>"
+
 
 
     # Helper function: convert a list of chords to a list of ids
@@ -109,7 +115,7 @@ class MusicDataset(torch.utils.data.Dataset):
     # This returns the size of the vocabulary - how many unique
     # tokens/chords are there?
     def getNumTokens(self):
-        return len(self.chordToId)
+        return self.startTokenId + 1
     
     # Helper function that takes in a list of chord Ids and 
     # writes them to a WAV file (named wavName) so you can listen to them
@@ -150,11 +156,18 @@ class MusicDataset(torch.utils.data.Dataset):
 
     #returns the item at index idx of the dataset
     def __getitem__(self, idx):
-    
-        #TODO: FIll in
-       
-        pass
-
+        (songIdx, chordIdx) = self.indexMap[idx]
+        inpt = []
+        output = []
+        songChords = self.corpus[songIdx]
+        for i in range(maxSeqLen):
+            inpt.append(self.chordToId[songChords[chordIdx + i]])
+            output.append(self.chordToId[songChords[chordIdx + i + 1]])
+        # TODO: check if its ok for this not to be a tupe
+        assert (len(inpt) == maxSeqLen)
+        assert (len(output) == maxSeqLen)
+        item = (self.chordListToTensor(inpt), self.chordListToTensor(output))
+        return item
 
 
 class MusicTransformer(torch.nn.Module):
@@ -196,13 +209,15 @@ class MusicTransformer(torch.nn.Module):
         
         self.d_model = d_model
         
-        #TODO: Fill in the rest
-        # self.layers = 
-        # self.optimizer = 
-        # self.loss_fn = 
-        # self.device =
-        
- 
+        #TODO: CHECK IF RIGHT
+        self.layers = torch.nn.Sequential(
+            torch.nn.Linear(self.d_model, ntoken),
+            torch.nn.LogSoftmax(dim=2)   
+        )
+        self.optimizer = torch.optim.SGD(self.parameters(), lr=1e-3)
+        self.loss_fn = torch.nn.NLLLoss()
+        self.device = device 
+        # TODO: check finish, everything between the two TODOS here was written by me
 
         self.init_weights()
 
@@ -211,8 +226,8 @@ class MusicTransformer(torch.nn.Module):
         initrange = 0.1
         self.embedding.weight.data.uniform_(-initrange, initrange)
         #TODO: include the following lines with the appropriate variable names to initialize the weigths
-        #<linear layer>.bias.data.zero_()
-        #<linear layer>.weight.data.uniform_(-initrange, initrange)
+        self.layers[0].bias.data.zero_()
+        self.layers[0].weight.data.uniform_(-initrange, initrange)
     
         
     def forward(self, input) :
@@ -224,6 +239,7 @@ class MusicTransformer(torch.nn.Module):
         # Encode using the transformer (should not need the mask)
         output = self.transformer_encoder(src, None)
         #TODO: pass through final encoder layers
+        output = self.layers(output)
         return output
 
     
@@ -239,27 +255,65 @@ class MusicTransformer(torch.nn.Module):
             # Transpose the dimensions of the input
             # The transformer expects the sequence length of come first
             inputs = inputs.t().contiguous()
-            
+            outputs = outputs.t().contiguous()
+
+
             #TODO: Fill in the rest...
+            outputs = torch.flatten(outputs, 0, 1)
+            preds = self.forward(inputs)
+            preds = torch.flatten(preds, 0, 1)
+            lossVal = self.loss_fn(preds, outputs)
+            print("Loss:", lossVal.item())
+            self.optimizer.zero_grad()
+            lossVal.backward()
+            self.optimizer.step()
+
         
     def predict(self, inpt):
+        with torch.no_grad():
+            #Only 1 instance at a time
+            numInputs = inpt.shape[0]
+            assert (numInputs == 1)
+            inputs = inpt.t().contiguous()
+            
+            self.eval()
+            pred = self.forward(inputs)
 
-        #Only 1 instance at a time
-        numInputs = inpt.shape[0]
-        assert (numInputs == 1)
-        inputs = inpt.t().contiguous()
-        
-        self.eval()
-        pred = self.forward(inputs)
-
-        #TODO: Turn the output into a list of probabilities
-        
+            #TODO: Turn the output into a list of probabilities
+            pred = pred.cpu().numpy()
+            pred = np.exp(pred[-1])
+            
         return pred
 
 
 def genMusic(model, train_dataset, device, train_dataloader):
     #TODO: Fill this in (instructions in assignment)
-    pass
+    inpt, output = train_dataset[0]
+    print("starting input:", inpt)
+    inpt = train_dataset.chordListToTensor(inpt)
+    while len(inpt) < 120:
+        currInput = inpt[-maxSeqLen:]
+        currInput = np.array(currInput)
+        print("PREDS INCOMING>>>>>")
+        probs = model.predict(torch.tensor([currInput]).to(device))
+        probs = probs[0] # have to do this because predict returns a list of a list
+        print("Probs:", probs)
+        weights = probs.tolist()
+        
+        assert probs.sum() >= 0.99 and probs.sum() <= 1.01
+        predictedId = random.choices(range(len(probs)), weights=weights, k=1)
+        inpt = inpt.tolist()
+        inpt.append(predictedId[0])
+        inpt = train_dataset.chordListToTensor(inpt)
+    
+    print("Predicted Id:", predictedId)
+    print("Generated sequence:", inpt)
+    inpt = inpt.tolist()
+    print(train_dataset.startTokenId)
+
+    train_dataset.saveSongAsWAV(inpt, "generated_music")
+
+
         
             
             
@@ -278,14 +332,17 @@ test_dataloader = torch.utils.data.DataLoader(test_data, batch_size=1)
 device = "cpu"
 if torch.cuda.is_available():
     device = "cuda"
+elif torch.backends.mps.is_available():
+    device = "mps"
     
 print("Using device", device)
 
 model = MusicTransformer(device, train_data.getNumTokens()).to(device)
 print(model)
 
-epochs = 100
+epochs = 35
 for e in range(epochs):
+    print("Epoch", e+1)
     model.doTrain(train_dataloader)
     
 genMusic(model, train_data, device, train_dataloader)
