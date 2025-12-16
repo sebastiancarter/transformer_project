@@ -22,6 +22,9 @@ class MusicDataset(torch.utils.data.Dataset):
     def __init__(self, train=True):
     
     
+        # this is set in buildMapsFromCorpus 
+        self.startToken = None #Change this later if you need an explicit start token
+
         corpus = self.getCorpusFromFolder("chopin/")
         self.buildMapsFromCorpus(corpus)
         
@@ -32,8 +35,6 @@ class MusicDataset(torch.utils.data.Dataset):
         else:
            self.corpus = corpus[threshold:]
         self.buildIndexToSongAndChordMap()
-        # this is set in buildMapsFromCorpus 
-        self.startToken = None #Change this later if you need an explicit start token
            
         
         
@@ -77,11 +78,7 @@ class MusicDataset(torch.utils.data.Dataset):
                     self.chordToId[chord] = idNumber
                     self.idToChord[idNumber] = chord
                     idNumber += 1
-        self.startTokenId = idNumber
-        # making a start token
-        self.startToken = "<START>"
-        self.chordToId["<START>"] = self.startTokenId
-        self.idToChord[self.startTokenId] = "<START>"
+        self.startToken = idNumber
 
 
 
@@ -115,7 +112,7 @@ class MusicDataset(torch.utils.data.Dataset):
     # This returns the size of the vocabulary - how many unique
     # tokens/chords are there?
     def getNumTokens(self):
-        return self.startTokenId
+        return self.startToken + 1
     
     # Helper function that takes in a list of chord Ids and 
     # writes them to a WAV file (named wavName) so you can listen to them
@@ -160,19 +157,18 @@ class MusicDataset(torch.utils.data.Dataset):
         inpt = []
         output = []
 
+        
+        songChords = self.corpus[songIdx].copy()
+        songIds = self.convertChordsToIds(songChords)
         # if the chord is the first in a song
         if chordIdx == 0:
-            # add the starting token to the input
-            # but still get 20 "real" chords
-            #inpt.append(self.startTokenId)
-            pass
+            songIds.insert(0, self.startToken) # insert the start token at the front of the
+            # song ids
+        inpt = songIds[chordIdx:chordIdx+maxSeqLen]
+        output = songIds[chordIdx+1:chordIdx+1+maxSeqLen]
+        assert (len(inpt) == maxSeqLen), "inpt is not the correct length!"
+        assert (len(output) == maxSeqLen), "the output of get item is not the correct length!"
         
-        songChords = self.corpus[songIdx]
-        for i in range(maxSeqLen):
-            inpt.append(self.chordToId[songChords[chordIdx + i]])
-            output.append(self.chordToId[songChords[chordIdx + i + 1]])
-        #assert (len(inpt) == maxSeqLen)
-        assert (len(output) == maxSeqLen)
         item = (self.chordListToTensor(inpt), self.chordListToTensor(output))
         return item
 
@@ -230,7 +226,6 @@ class MusicTransformer(torch.nn.Module):
     def init_weights(self):
         initrange = 0.1
         self.embedding.weight.data.uniform_(-initrange, initrange)
-        #TODO: include the following lines with the appropriate variable names to initialize the weigths
         self.layers[0].bias.data.zero_()
         self.layers[0].weight.data.uniform_(-initrange, initrange)
     
@@ -243,7 +238,6 @@ class MusicTransformer(torch.nn.Module):
         src = src + self.pe[:src.size(0)]
         # Encode using the transformer (should not need the mask)
         output = self.transformer_encoder(src, None)
-        #TODO: pass through final encoder layers
         output = self.layers(output)
         return output
 
@@ -260,10 +254,7 @@ class MusicTransformer(torch.nn.Module):
             # Transpose the dimensions of the input
             # The transformer expects the sequence length of come first
             inputs = inputs.t().contiguous()
-            # we also transpose the dims of the output
-            # outputs = outputs.t().contiguous()
 
-            #TODO: Fill in the rest...
             # flattening outputs and preds before we put
             # them into the loss function because NLLLoss 
             # needs you to flatten the sequential data into a single
@@ -271,8 +262,8 @@ class MusicTransformer(torch.nn.Module):
             outputs = torch.flatten(outputs)
             preds = self.forward(inputs)
             # using 0 and 1 because it changes preds from
-            # shape [seq_len, batch, vocab] to shape
-            # shape []
+            # shape [seq_len, batch size, vocab] to shape
+            # shape [seq_len, batch size]
             preds = torch.flatten(preds, 0, 1)
             lossVal = self.loss_fn(preds, outputs)
             lossSum += lossVal.item() # doing this based on travis feedback to mari, sum the loss across
@@ -292,7 +283,6 @@ class MusicTransformer(torch.nn.Module):
             self.eval()
             pred = self.forward(inputs)
 
-            #TODO: Turn the output into a list of probabilities
             # pred needs to be on the cpu and a numpy array for the slicing we are about
             # to do!
             pred = pred.cpu().numpy()
@@ -300,7 +290,8 @@ class MusicTransformer(torch.nn.Module):
             # caring about the next chord in the sequence
             # we then take the first item because pred[-1] is a list of a list of probabilities
             # and we just want the list of probabilities to be returned
-            outputPred = pred[-1][0]
+            outputPred = pred[-1,0,:]
+            assert np.count_nonzero(outputPred) == len(outputPred)
             # we need to exponentiated the probabilities because our ouput layer is
             # log softmax, and we want the probabilities not the log probabilities
             pred = np.exp(outputPred)            
@@ -308,8 +299,7 @@ class MusicTransformer(torch.nn.Module):
 
 
 def genMusic(model, dataset, device, dataloader, fileName):
-    #TODO: Fill this in (instructions in assignment)
-    inpt, output = dataset[0]
+    (inpt, output) = dataset[0]
     # we start the song off with 20 chords
     # we convert the list of chord idxs into a tensor
     songChords = dataset.chordListToTensor(inpt)
@@ -361,15 +351,13 @@ print("Using device", device)
 model = MusicTransformer(device, train_data.getNumTokens()).to(device)
 print(model)
 
-# epochs = 1000
-epochs = 1000
+epochs = 1500
 for e in range(epochs):
     print("Epoch", e+1)
     model.doTrain(train_dataloader)
     
 genMusic(model, train_data, device, train_dataloader, fileName="train_generated_music")
 
-#TODO: Evaluate on test data as well as train data
 genMusic(model, test_data, device, test_dataloader, fileName="test_generated_music")
     
     
